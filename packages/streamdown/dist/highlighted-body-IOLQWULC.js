@@ -1,0 +1,2 @@
+"use client";
+import {i,c,b}from'./chunk-CEFAXK4K.js';import {useContext,useState,useEffect}from'react';import {jsx}from'react/jsx-runtime';var L=({code:s,language:o,raw:t,className:h,...d})=>{let{shikiTheme:l}=useContext(i),i$1=c(),[m,e]=useState(t);return useEffect(()=>{if(!i$1){e(t);return}let g=i$1.highlight({code:s,language:o,themes:l},p=>{e(p);});if(g){e(g);return}e(t);},[s,o,l,i$1,t]),jsx(b,{className:h,language:o,result:m,...d})};export{L as HighlightedCodeBlockBody};
