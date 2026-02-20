@@ -170,4 +170,265 @@ describe("Code block loading behavior", () => {
       expect(updatedToken?.style.getPropertyValue("--sdm-c")).toBe("#ff0000");
     });
   });
+
+  it("does not de-highlight on cache miss after first highlight (stable highlight)", async () => {
+    const { StreamdownContext } = await import("../index");
+    const { PluginContext } = await import("../lib/plugin-context");
+    const { HighlightedCodeBlockBody } = await import(
+      "../lib/code-block/highlighted-body"
+    );
+
+    const rawResult: HighlightResult = {
+      bg: "transparent",
+      fg: "inherit",
+      tokens: [
+        [
+          {
+            content: "const x = 1;",
+            color: "inherit",
+            bgColor: "transparent",
+            htmlStyle: {},
+            offset: 0,
+          },
+        ],
+      ],
+    };
+
+    const highlightedResult: HighlightResult = {
+      ...rawResult,
+      tokens: [
+        [
+          {
+            ...rawResult.tokens[0][0],
+            color: "#ff0000",
+          },
+        ],
+      ],
+    };
+
+    let currentCallback: ((result: HighlightResult) => void) | null = null;
+
+    const codePlugin = {
+      name: "shiki" as const,
+      type: "code-highlighter" as const,
+      highlight: vi.fn(
+        (_: HighlightOptions, callback?: (result: HighlightResult) => void) => {
+          currentCallback = callback ?? null;
+          // Return null to simulate cache miss (async path)
+          return null;
+        }
+      ),
+      supportsLanguage: vi.fn().mockReturnValue(true),
+      getSupportedLanguages: vi.fn().mockReturnValue(["javascript"]),
+      getThemes: vi.fn().mockReturnValue(["github-light", "github-dark"]),
+    };
+
+    const { container, rerender } = render(
+      <PluginContext.Provider value={{ code: codePlugin as any }}>
+        <StreamdownContext.Provider
+          value={{
+            shikiTheme: ["github-light", "github-dark"],
+            controls: true,
+            isAnimating: false,
+            mode: "streaming",
+          }}
+        >
+          <HighlightedCodeBlockBody
+            code="const x = 1;"
+            language="javascript"
+            raw={rawResult}
+          />
+        </StreamdownContext.Provider>
+      </PluginContext.Provider>
+    );
+
+    // Initially should show raw (inherit color)
+    await waitFor(() => {
+      const token = container.querySelector(
+        '[data-streamdown="code-block-body"] code > span > span'
+      ) as HTMLElement | null;
+      expect(token?.style.getPropertyValue("--sdm-c")).toBe("inherit");
+    });
+
+    // First highlight arrives
+    await act(async () => {
+      currentCallback?.(highlightedResult);
+    });
+
+    // Now should show highlighted (red)
+    await waitFor(() => {
+      const token = container.querySelector(
+        '[data-streamdown="code-block-body"] code > span > span'
+      ) as HTMLElement | null;
+      expect(token?.style.getPropertyValue("--sdm-c")).toBe("#ff0000");
+    });
+
+    // Simulate streaming: update code (triggers new highlight request)
+    rerender(
+      <PluginContext.Provider value={{ code: codePlugin as any }}>
+        <StreamdownContext.Provider
+          value={{
+            shikiTheme: ["github-light", "github-dark"],
+            controls: true,
+            isAnimating: false,
+            mode: "streaming",
+          }}
+        >
+          <HighlightedCodeBlockBody
+            code="const x = 1; const y = 2;"
+            language="javascript"
+            raw={rawResult}
+          />
+        </StreamdownContext.Provider>
+      </PluginContext.Provider>
+    );
+
+    // Should NOT de-highlight while waiting for new highlight (cache miss)
+    // The color should still be red (previous highlight), not inherit
+    const tokenAfterRerender = container.querySelector(
+      '[data-streamdown="code-block-body"] code > span > span'
+    ) as HTMLElement | null;
+    expect(tokenAfterRerender?.style.getPropertyValue("--sdm-c")).toBe(
+      "#ff0000"
+    );
+  });
+
+  it("ignores stale callbacks (out-of-order highlight responses)", async () => {
+    const { StreamdownContext } = await import("../index");
+    const { PluginContext } = await import("../lib/plugin-context");
+    const { HighlightedCodeBlockBody } = await import(
+      "../lib/code-block/highlighted-body"
+    );
+
+    const rawResult: HighlightResult = {
+      bg: "transparent",
+      fg: "inherit",
+      tokens: [
+        [
+          {
+            content: "const x = 1;",
+            color: "inherit",
+            bgColor: "transparent",
+            htmlStyle: {},
+            offset: 0,
+          },
+        ],
+      ],
+    };
+
+    const oldHighlight: HighlightResult = {
+      ...rawResult,
+      tokens: [
+        [
+          {
+            ...rawResult.tokens[0][0],
+            color: "#ff0000", // Old: red
+          },
+        ],
+      ],
+    };
+
+    const newHighlight: HighlightResult = {
+      ...rawResult,
+      tokens: [
+        [
+          {
+            ...rawResult.tokens[0][0],
+            color: "#00ff00", // New: green
+          },
+        ],
+      ],
+    };
+
+    const callbacks: Array<(result: HighlightResult) => void> = [];
+
+    const codePlugin = {
+      name: "shiki" as const,
+      type: "code-highlighter" as const,
+      highlight: vi.fn(
+        (_: HighlightOptions, callback?: (result: HighlightResult) => void) => {
+          if (callback) {
+            callbacks.push(callback);
+          }
+          return null;
+        }
+      ),
+      supportsLanguage: vi.fn().mockReturnValue(true),
+      getSupportedLanguages: vi.fn().mockReturnValue(["javascript"]),
+      getThemes: vi.fn().mockReturnValue(["github-light", "github-dark"]),
+    };
+
+    const { container, rerender } = render(
+      <PluginContext.Provider value={{ code: codePlugin as any }}>
+        <StreamdownContext.Provider
+          value={{
+            shikiTheme: ["github-light", "github-dark"],
+            controls: true,
+            isAnimating: false,
+            mode: "streaming",
+          }}
+        >
+          <HighlightedCodeBlockBody
+            code="const x = 1;"
+            language="javascript"
+            raw={rawResult}
+          />
+        </StreamdownContext.Provider>
+      </PluginContext.Provider>
+    );
+
+    // First highlight request made
+    await waitFor(() => {
+      expect(callbacks.length).toBe(1);
+    });
+
+    // Trigger new code before first callback returns
+    rerender(
+      <PluginContext.Provider value={{ code: codePlugin as any }}>
+        <StreamdownContext.Provider
+          value={{
+            shikiTheme: ["github-light", "github-dark"],
+            controls: true,
+            isAnimating: false,
+            mode: "streaming",
+          }}
+        >
+          <HighlightedCodeBlockBody
+            code="const x = 2;"
+            language="javascript"
+            raw={rawResult}
+          />
+        </StreamdownContext.Provider>
+      </PluginContext.Provider>
+    );
+
+    // Second highlight request made
+    await waitFor(() => {
+      expect(callbacks.length).toBe(2);
+    });
+
+    // Second callback resolves first (newer highlight: green)
+    await act(async () => {
+      callbacks[1](newHighlight);
+    });
+
+    // Should show green (newer)
+    await waitFor(() => {
+      const token = container.querySelector(
+        '[data-streamdown="code-block-body"] code > span > span'
+      ) as HTMLElement | null;
+      expect(token?.style.getPropertyValue("--sdm-c")).toBe("#00ff00");
+    });
+
+    // First (stale) callback resolves (older highlight: red)
+    await act(async () => {
+      callbacks[0](oldHighlight);
+    });
+
+    // Should STILL show green (newer), not red (stale)
+    const token = container.querySelector(
+      '[data-streamdown="code-block-body"] code > span > span'
+    ) as HTMLElement | null;
+    expect(token?.style.getPropertyValue("--sdm-c")).toBe("#00ff00");
+  });
 });
