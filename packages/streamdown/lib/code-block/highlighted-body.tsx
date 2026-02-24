@@ -1,4 +1,10 @@
-import { type HTMLAttributes, useContext, useEffect, useState } from "react";
+import {
+  type HTMLAttributes,
+  useContext,
+  useEffect,
+  useState,
+  useTransition,
+} from "react";
 import type { BundledLanguage } from "shiki";
 import { StreamdownContext } from "../../index";
 import { useCodePlugin } from "../plugin-context";
@@ -20,6 +26,7 @@ export const HighlightedCodeBlockBody = ({
 }: HighlightedCodeBlockBodyProps) => {
   const { shikiTheme } = useContext(StreamdownContext);
   const codePlugin = useCodePlugin();
+  const [_isPending, startTransition] = useTransition();
   const [result, setResult] = useState<HighlightResult>(raw);
 
   useEffect(() => {
@@ -35,12 +42,16 @@ export const HighlightedCodeBlockBody = ({
         themes: shikiTheme,
       },
       (highlightedResult) => {
-        setResult(highlightedResult);
+        startTransition(() => {
+          setResult(highlightedResult);
+        });
       }
     );
 
     if (cachedResult) {
-      setResult(cachedResult);
+      startTransition(() => {
+        setResult(cachedResult);
+      });
     }
   }, [code, language, shikiTheme, codePlugin, raw]);
 
