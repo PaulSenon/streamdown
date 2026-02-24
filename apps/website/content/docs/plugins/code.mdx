@@ -42,4 +42,56 @@ const code = createCodePlugin({
 });
 ```
 
+## Worker-backed highlighter pattern
+
+If your app needs stricter main-thread isolation, implement a custom `CodeHighlighterPlugin` that forwards highlight work to a Web Worker.
+
+```tsx
+import type { CodeHighlighterPlugin, HighlightOptions, HighlightResult } from '@streamdown/code';
+
+export function createWorkerCodePlugin(): CodeHighlighterPlugin {
+  const worker = new Worker(new URL('./code-worker.ts', import.meta.url), {
+    type: 'module',
+  });
+
+  const cache = new Map<string, HighlightResult>();
+  const subscribers = new Map<string, Set<(result: HighlightResult) => void>>();
+
+  worker.onmessage = (event) => {
+    const { key, result } = event.data as { key: string; result: HighlightResult };
+    cache.set(key, result);
+    const listeners = subscribers.get(key);
+    if (!listeners) return;
+    for (const listener of listeners) listener(result);
+    subscribers.delete(key);
+  };
+
+  return {
+    name: 'shiki',
+    type: 'code-highlighter',
+    supportsLanguage: () => true,
+    getSupportedLanguages: () => [],
+    getThemes: () => ['github-light', 'github-dark'],
+    highlight(options: HighlightOptions, callback) {
+      const key = `${options.language}:${options.themes.join(':')}:${options.code}`;
+      const cached = cache.get(key);
+      if (cached) {
+        return cached;
+      }
+
+      if (callback) {
+        const set = subscribers.get(key) ?? new Set();
+        set.add(callback);
+        subscribers.set(key, set);
+      }
+
+      worker.postMessage({ type: 'highlight', key, options });
+      return null;
+    },
+  };
+}
+```
+
+Use this pattern to preserve Streamdown's sync-cache/async-callback contract while moving heavy tokenization out of the UI thread.
+
 See [Code Blocks](/docs/code-blocks) for details on rendering behavior, line numbers, and copy buttons.
